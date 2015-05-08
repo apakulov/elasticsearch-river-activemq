@@ -6,7 +6,7 @@
     <groupId>org.elasticsearch</groupId>
     <artifactId>elasticsearch-river-activemq</artifactId>
     <name>elasticsearch-river-activemq</name>
-    <version>1.2</version>
+    <version>1.5.1</version>
     <packaging>jar</packaging>
     <description>ActiveMQ River for ElasticSearch</description>
     <inceptionYear>2012</inceptionYear>
@@ -30,28 +30,56 @@
     </parent>
 
     <properties>
-        <elasticsearch.version>0.19.8</elasticsearch.version>
-        <activemq.version>5.2.0</activemq.version>
+        <elasticsearch.version>1.5.1</elasticsearch.version>
+        <activemq.version>5.6.0</activemq.version>
         <log4j.version>1.2.16</log4j.version>
+        <slf4j.version>1.6.4</slf4j.version>
         <junit.version>4.8.2</junit.version>
         <maven-compiler-plugin.version>2.5.1</maven-compiler-plugin.version>
         <maven-source-plugin.version>2.1.2</maven-source-plugin.version>
         <maven-assembly-plugin.version>2.3</maven-assembly-plugin.version>
     </properties>
 
-
     <dependencies>
-
         <dependency>
             <groupId>org.apache.activemq</groupId>
             <artifactId>activemq-core</artifactId>
             <version>${activemq.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.servlet</groupId>
+                    <artifactId>servlet-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-core</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.fusesource.fuse-extra</groupId>
+                    <artifactId>fusemq-leveldb</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.fusesource.mqtt-client</groupId>
+                    <artifactId>mqtt-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>backport-util-concurrent</groupId>
+                    <artifactId>backport-util-concurrent</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
             <groupId>org.elasticsearch</groupId>
             <artifactId>elasticsearch</artifactId>
             <version>${elasticsearch.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-log4j12</artifactId>
+            <version>${slf4j.version}</version>
             <scope>compile</scope>
         </dependency>
 
