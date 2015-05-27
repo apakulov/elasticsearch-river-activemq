@@ -21,26 +21,27 @@ package org.elasticsearch.river.activemq;
 
 import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.broker.BrokerService;
-import org.apache.activemq.broker.TransportConnector;
-import org.elasticsearch.action.ListenableActionFuture;
 import org.elasticsearch.action.get.GetResponse;
-import org.elasticsearch.client.Client;
 import org.elasticsearch.common.settings.ImmutableSettings;
-import org.elasticsearch.indices.IndexMissingException;
-import org.elasticsearch.node.Node;
-import org.elasticsearch.node.NodeBuilder;
-import org.junit.Assert;
-import org.junit.Test;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.plugins.PluginsService;
+import org.elasticsearch.test.ElasticsearchIntegrationTest;
+import org.junit.*;
 
 import javax.jms.*;
-import java.io.IOException;
 
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 
 /**
  * @author Dominik Dorn // http://dominikdorn.com
+ * @author Alexander Pakulov <a.pakulov@gmail.com>
  */
-public class ActiveMQRiverTest {
+@ElasticsearchIntegrationTest.ClusterScope(
+        scope = ElasticsearchIntegrationTest.Scope.SUITE,
+        numDataNodes = 1,
+        numClientNodes = 0,
+        transportClientRatio = 0.0)
+public class ActiveMQRiverTest extends ElasticsearchIntegrationTest {
 
     final String message = "{ \"index\" : { \"_index\" : \"test\", \"_type\" : \"type1\", \"_id\" : \"1\" }\n" +
             "{ \"type1\" : { \"field1\" : \"value1\" } }\n" +
@@ -54,90 +55,66 @@ public class ActiveMQRiverTest {
             "{ \"create\" : { \"_index\" : \"test2\", \"_type\" : \"type2\", \"_id\" : \"1\" }\n" +
             "{ \"type2\" : { \"field2\" : \"value2\" } }";
 
-    BrokerService broker;
-    Client client;
+    private static BrokerService broker;
 
-    private void startActiveMQBroker() throws Exception {
+    @BeforeClass
+    public static void startActiveMQBroker() throws Exception {
         broker = new BrokerService();
-        broker.setUseJmx(true);
+        broker.setUseJmx(false);
         broker.addConnector("tcp://localhost:61616");
+        broker.setUseShutdownHook(true);
         broker.start();
     }
 
-    private void stopActiveMQBroker() throws Exception {
-        for(TransportConnector c : broker.getTransportConnectors())
-        {
-            try{
-                c.stop();
-                broker.removeConnector(c);
-            }
-            catch (Exception e)
-            {
-                e.printStackTrace();
-            }
-        }
+    @AfterClass
+    public static void stopActiveMQBroker() throws Exception {
+//        for (TransportConnector connector : broker.getTransportConnectors()) {
+//            try {
+//                connector.stop();
+//                broker.removeConnector(connector);
+//            } catch (Exception e) {
+//                e.printStackTrace();
+//            }
+//        }
 
         broker.getBroker().stop();
     }
 
-    private void startElasticSearchDefaultInstance() throws IOException {
-        Node node = NodeBuilder.nodeBuilder().settings(ImmutableSettings.settingsBuilder().put("gateway.type", "none")).node();
-        client = node.client();
-        client.prepareIndex("_river", "test1", "_meta").setSource(jsonBuilder().startObject().field("type", "activemq").endObject()).execute().actionGet();
+    @Override
+    protected int numberOfReplicas() {
+        return 0;
     }
 
-    private void startElasticSearchSourceNameInstance(String sourceName) throws IOException {
-        Node node = NodeBuilder.nodeBuilder().settings(ImmutableSettings.settingsBuilder().put("gateway.type", "none")).node();
-        client = node.client();
-        client.prepareIndex("_river", "test1", "_meta").setSource(jsonBuilder().startObject()
-                .field("type", "activemq")
-                .field("sourceName", sourceName)
-                .endObject()).execute().actionGet();
+    @Override
+    protected int numberOfShards() {
+        return 1;
     }
 
-    private void stopElasticSearchInstance() {
-        System.out.println("shutting down elasticsearch");
-        client.admin().cluster().prepareNodesShutdown().execute();
-        client.close();
+    @Override
+    protected Settings nodeSettings(int nodeOrdinal) {
+        return ImmutableSettings.settingsBuilder()
+                .put(super.nodeSettings(nodeOrdinal))
+                .put("plugins." + PluginsService.LOAD_PLUGIN_FROM_CLASSPATH, true)
+                .build();
     }
-
 
     @Test
     public void testSimpleScenario() throws Exception {
+        internalCluster().client().prepareIndex("_river", "test1", "_meta")
+                .setSource(jsonBuilder().startObject()
+                        .field("type", "activemq")
+                        .endObject())
+                .execute().actionGet();
 
-        startActiveMQBroker();
-        startElasticSearchDefaultInstance();
-
-
-        // assure that the index is not yet there
-        try {
-            ListenableActionFuture future = client.prepareGet("test", "type1", "1").execute();
-            future.actionGet();
-            Assert.fail();
-        } catch (IndexMissingException idxExcp) {
-
-        }
-
+        assertFalse(internalCluster().client().admin().indices().prepareExists("test").execute().actionGet().isExists());
 
         // connect to the ActiveMQ Broker and publish a message into the default queue
         postMessageToQueue(ActiveMQRiver.defaultActiveMQSourceName, message);
 
-
         Thread.sleep(3000l);
 
-        {
-            ListenableActionFuture future = client.prepareGet("test", "type1", "1").execute();
-            Object o = future.actionGet();
-            GetResponse resp = (GetResponse) o;
-            Assert.assertEquals("{ \"type1\" : { \"field1\" : \"value1\" } }", resp.getSourceAsString());
-        }
-
-
-        stopElasticSearchInstance();
-        stopActiveMQBroker();
-
-        Thread.sleep(3000l);
-
+        GetResponse resp = internalCluster().client().prepareGet("test", "type1", "1").execute().actionGet();
+        assertEquals("{ \"type1\" : { \"field1\" : \"value1\" } }", resp.getSourceAsString());
     }
 
     @Test
@@ -145,37 +122,25 @@ public class ActiveMQRiverTest {
 
         String riverCustomSourceName = "nonDefaultNameQueue";
 
-        startActiveMQBroker();
-        startElasticSearchSourceNameInstance(riverCustomSourceName);
-
+        internalCluster().client().prepareIndex("_river", "test2", "_meta")
+                .setSource(jsonBuilder()
+                        .startObject()
+                            .field("type", "activemq")
+                            .startObject("activemq")
+                                    .field("sourceName", riverCustomSourceName)
+                                    .field("connectionRestart", 1)
+                            .endObject()
+                        .endObject())
+                .execute().actionGet();
 
         // assure that the index is not yet there
-        try {
-            ListenableActionFuture future = client.prepareGet("test2", "type2", "2").execute();
-            future.actionGet();
-            Assert.fail();
-        } catch (IndexMissingException idxExcp) {
-
-        }
+        assertFalse(internalCluster().client().admin().indices().prepareExists("test2").execute().actionGet().isExists());
 
         postMessageToQueue(riverCustomSourceName, message2);
-
-
         Thread.sleep(3000l);
 
-        {
-            ListenableActionFuture future = client.prepareGet("test2", "type2", "2").execute();
-            Object o = future.actionGet();
-            GetResponse resp = (GetResponse) o;
-            Assert.assertEquals("{ \"type2\" : { \"field2\" : \"value2\" } }", resp.getSourceAsString());
-        }
-
-
-        stopElasticSearchInstance();
-        stopActiveMQBroker();
-
-        Thread.sleep(3000l);
-
+        GetResponse resp = internalCluster().client().prepareGet("test2", "type2", "1").execute().actionGet();
+        assertEquals("{ \"type2\" : { \"field2\" : \"value2\" } }", resp.getSourceAsString());
     }
 
     private void postMessageToQueue(final String sourceName, final String msgText) {
@@ -194,6 +159,4 @@ public class ActiveMQRiverTest {
             Assert.fail("JMS Exception");
         }
     }
-
-
 }

@@ -25,6 +25,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.common.base.Stopwatch;
 import org.elasticsearch.common.collect.Lists;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.unit.TimeValue;
@@ -38,6 +39,7 @@ import org.elasticsearch.river.RiverSettings;
 import javax.jms.*;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.*;
 
 /**
  * &quot;Native&quot; ActiveMQ River for ElasticSearch.
@@ -63,7 +65,7 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
     private String activeMQConsumerName;
     private boolean activeMQCreateDurableConsumer;
     private String activeMQTopicFilterExpression;
-
+    private Integer activeMQConnectionRestart;
 
     private final Client client;
 
@@ -74,7 +76,6 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
     private volatile boolean closed = false;
 
     private volatile Thread thread;
-
     private volatile ConnectionFactory connectionFactory;
 
     @SuppressWarnings({"unchecked"})
@@ -97,7 +98,7 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
             activeMQConsumerName = XContentMapValues.nodeStringValue(activeMQSettings.get("consumerName"), defaultActiveMQConsumerName);
             activeMQCreateDurableConsumer = XContentMapValues.nodeBooleanValue(activeMQSettings.get("durable"), defaultActiveMQCreateDurableConsumer);
             activeMQTopicFilterExpression = XContentMapValues.nodeStringValue(activeMQSettings.get("filter"), defaultActiveMQTopicFilterExpression);
-
+            activeMQConnectionRestart = XContentMapValues.nodeIntegerValue(activeMQSettings.get("connectionRestart"));
         } else {
             activeMQUser = (defaultActiveMQUser);
             activeMQPassword = (defaultActiveMQPassword);
@@ -151,9 +152,7 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
     }
 
     private class Consumer implements Runnable {
-
         private Connection connection;
-
         private Session session;
         private Destination destination;
 
@@ -185,7 +184,6 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
                         // ignore, if we are closing, we will exit later
                     }
                 }
-
 
                 // define the queue
                 MessageConsumer consumer;
@@ -220,6 +218,10 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
                     cleanup(5, "failed to start connection");
                 }
 
+                Stopwatch connectionStopwatch = Stopwatch.createUnstarted();
+                if (activeMQConnectionRestart != null) {
+                    connectionStopwatch.start();
+                }
 
                 // now use the queue/topic to listen for messages
                 while (true) {
@@ -360,6 +362,12 @@ public class ActiveMQRiver extends AbstractRiverComponent implements River {
                         }
                     } else {
                         logger.warn("Validation failed: message is not of type TextMessage");
+                    }
+
+                    if (connectionStopwatch.isRunning() && connectionStopwatch.elapsed(TimeUnit.SECONDS) >= activeMQConnectionRestart) {
+                        // Restart connection in configured seconds time frame
+                        cleanup(0, "Restarting connection");
+                        break;
                     }
                 }
             }
